@@ -6,12 +6,13 @@ import argparse
 import torch
 import numpy as np
 import pandas as pd
-
+from viz_plot import plot_trajectories
 sys.path.append("../../trajectron")
 from tqdm import tqdm
 from model.model_registrar import ModelRegistrar
 from model.trajectron import Trajectron
 import evaluation
+from utils import prediction_output_to_trajectories
 
 seed = 0
 np.random.seed(seed)
@@ -163,6 +164,39 @@ if __name__ == "__main__":
 
                 if not predictions:
                     continue
+                        # === DEBUG VISUALIZATION: plot one scene/timestep ===
+                # === DEBUG VISUALIZATION: plot one scene/timestep ===
+                if i == 0:
+                    print("DEBUG: plotting scene 0 at timestep", t)
+                    pred_dict, hist_dict, fut_dict = prediction_output_to_trajectories(
+                        predictions,
+                        scene.dt,
+                        max_hl,
+                        ph,
+                        map=None,
+                        prune_ph_to_future=True
+                    )
+
+                    # Pick first timestep key
+                    t_key = sorted(pred_dict.keys())[0]
+                    # Pick first node in that timestep
+                    node = list(pred_dict[t_key].keys())[0]
+
+                    # Extract arrays
+                    samples = pred_dict[t_key][node]      # (K, ph, 2)
+                    past = hist_dict[t_key][node]         # (T_obs, 2)
+                    future_gt = fut_dict[t_key][node]     # (ph, 2)
+
+                    plot_trajectories(
+                        past,
+                        future_gt,
+                        samples,
+                        title=f"scene_{i}_t_{t_key}"
+                    )
+
+                    # only do this once
+                    i = 1_000_000  # just to never enter this block again
+
 
                 batch_error_dict = evaluation.compute_batch_statistics(predictions,
                                                                        scene.dt,
