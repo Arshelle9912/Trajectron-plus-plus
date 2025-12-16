@@ -1,5 +1,4 @@
 pred_figs/
-processed/
 public-code/
 .idea/
 
@@ -409,3 +408,4 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+.DS_Store

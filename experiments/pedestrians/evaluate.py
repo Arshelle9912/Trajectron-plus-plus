@@ -66,7 +66,7 @@ if __name__ == "__main__":
     max_hl = hyperparams['maximum_history_length']
 
     with torch.no_grad():
-        ############### MOST LIKELY ###############
+        # MOST LIKELY #
         eval_ade_batch_errors = np.array([])
         eval_fde_batch_errors = np.array([])
         print("-- Evaluating GMM Grid Sampled (Most Likely)")
@@ -164,8 +164,6 @@ if __name__ == "__main__":
 
                 if not predictions:
                     continue
-                        # === DEBUG VISUALIZATION: plot one scene/timestep ===
-                # === DEBUG VISUALIZATION: plot one scene/timestep ===
                 if i == 0:
                     print("DEBUG: plotting scene 0 at timestep", t)
                     pred_dict, hist_dict, fut_dict = prediction_output_to_trajectories(
@@ -176,16 +174,11 @@ if __name__ == "__main__":
                         map=None,
                         prune_ph_to_future=True
                     )
-
-                    # Pick first timestep key
                     t_key = sorted(pred_dict.keys())[0]
-                    # Pick first node in that timestep
                     node = list(pred_dict[t_key].keys())[0]
-
-                    # Extract arrays
-                    samples = pred_dict[t_key][node]      # (K, ph, 2)
-                    past = hist_dict[t_key][node]         # (T_obs, 2)
-                    future_gt = fut_dict[t_key][node]     # (ph, 2)
+                    samples = pred_dict[t_key][node]   
+                    past = hist_dict[t_key][node]     
+                    future_gt = fut_dict[t_key][node]   
 
                     plot_trajectories(
                         past,
@@ -194,7 +187,7 @@ if __name__ == "__main__":
                         title=f"scene_{i}_t_{t_key}"
                     )
 
-                    # only do this once
+
                     i = 1_000_000  # just to never enter this block again
 
 
@@ -218,7 +211,7 @@ if __name__ == "__main__":
                      ).to_csv(os.path.join(args.output_path, args.output_tag + '_kde_best_of.csv'))
 
 
-        ############### FULL ###############
+        # FULL
         eval_ade_batch_errors = np.array([])
         eval_fde_batch_errors = np.array([])
         eval_kde_nll = np.array([])

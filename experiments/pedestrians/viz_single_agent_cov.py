@@ -3,7 +3,6 @@ import sys
 import dill
 import json
 import argparse
-
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -18,9 +17,7 @@ from model.trajectron import Trajectron
 from utils import prediction_output_to_trajectories
 
 
-# -----------------------------
 # Model + env helpers
-# -----------------------------
 def load_model(model_dir, env, checkpoint, device="cpu"):
     model_registrar = ModelRegistrar(model_dir, device)
     model_registrar.load_models(checkpoint)
@@ -80,9 +77,7 @@ def pick_node_and_t(pred_dict_node_first, desired_t=None):
     return node, t_key
 
 
-# -----------------------------
 # Shape normalization
-# -----------------------------
 def normalize_samples(samples):
     samples = np.asarray(samples)
 
@@ -100,9 +95,7 @@ def normalize_samples(samples):
     return samples
 
 
-# -----------------------------
 # Covariance math (velocity -> position)
-# -----------------------------
 def estimate_vel_samples_from_pos(samples_pos, p0, dt):
     samples_pos = np.asarray(samples_pos)
     p0 = np.asarray(p0)
@@ -120,9 +113,8 @@ def estimate_vel_samples_from_pos(samples_pos, p0, dt):
 def propagate_pos_cov_from_vel(vel_samples, dt):
     """
     Single-integrator uncertainty propagation:
-        Σ_p^{t+1} = Σ_p^t + (dt)^2 Σ_u^t
-    with Σ_p^0 = 0.
-    This is the Trajectron++ pedestrian assumption. :contentReference[oaicite:1]{index=1}
+        Σ_p^{t+1} = Σ_p^t + (dt)^2 Σ_u^t with Σ_p^0 = 0.
+    This is the Trajectron++ pedestrian assumption.
     """
     vel_samples = np.asarray(vel_samples)
     K, ph, _ = vel_samples.shape
@@ -142,9 +134,7 @@ def propagate_pos_cov_from_vel(vel_samples, dt):
     return cov_p_list
 
 
-# -----------------------------
 # 2D ellipse helper
-# -----------------------------
 def add_cov_ellipse(ax, mu, cov, conf=0.7, fill=False, facecolor=None, **kwargs):
     mu = np.asarray(mu)
     cov = np.asarray(cov)
@@ -176,9 +166,7 @@ def add_cov_ellipse(ax, mu, cov, conf=0.7, fill=False, facecolor=None, **kwargs)
     ax.add_patch(e)
 
 
-# -----------------------------
 # 2D plot: draw ONE node onto an existing axis
-# -----------------------------
 def draw_node_cov_chain_2d(
     ax,
     past,
@@ -195,7 +183,7 @@ def draw_node_cov_chain_2d(
     label_once=None,
 ):
     """
-    label_once: dict of booleans controlling whether to add labels
+    dict of booleans controlling whether to add labels
       keys: history, current, pred, conf, gt
     """
     if label_once is None:
@@ -284,9 +272,7 @@ def draw_node_cov_chain_2d(
         dummy.set_label(f"{int(conf * 100)}% conf")
 
 
-# -----------------------------
 # 2D plot: MULTI-NODE overlay
-# -----------------------------
 def plot_timestep_all_nodes_2d(
     pred_dict,
     hist_dict,
@@ -331,8 +317,6 @@ def plot_timestep_all_nodes_2d(
             fill_ellipses=fill_ellipses,
             label_once=label_once,
         )
-
-        # After first node, disable labels to avoid duplicates
         label_once = {"history": False, "current": False, "pred": False, "conf": False, "gt": False}
 
     ax.set_xlabel("X")
@@ -357,9 +341,7 @@ def plot_timestep_all_nodes_2d(
     print(f"Saved figure to {out_path}")
 
 
-# -----------------------------
-# 3D helpers + plot (kept as-is, optional)
-# -----------------------------
+# 3D helpers + plot 
 def ellipse_outline_points(mu, cov, conf=0.7, num=80):
     mu = np.asarray(mu)
     cov = np.asarray(cov)
@@ -465,9 +447,7 @@ def plot_cov_chain_3d(
     print(f"Saved figure to {out_path}")
 
 
-# -----------------------------
 # Main
-# -----------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
@@ -551,7 +531,7 @@ def main():
 
     pred_dict, hist_dict, fut_dict = ensure_node_first(pred_dict, hist_dict, fut_dict)
 
-    # --- 2D multi-node overlay ---
+    # 2D multi-node overlay 
     if args.mode == "2d" and args.all_nodes:
         title = f"Scene_{args.scene_index}_Timestep_{t} {args.title_suffix}".strip()
         plot_timestep_all_nodes_2d(
@@ -569,7 +549,7 @@ def main():
         )
         return
 
-    # --- single node fallback ---
+    # single node fallback 
     node, t_key = pick_node_and_t(pred_dict, desired_t=t)
     if node is None:
         print("Could not find any valid node/timestep in predictions.")

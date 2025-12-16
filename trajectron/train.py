@@ -35,7 +35,8 @@ if args.eval_device is None:
     args.eval_device = torch.device('cpu')
 
 # This is needed for memory pinning using a DataLoader (otherwise memory is pinned to cuda:0 by default)
-torch.cuda.set_device(args.device)
+if torch.cuda.is_available() and isinstance(args.device, torch.device) and args.device.type == 'cuda':
+    torch.cuda.set_device(args.device)
 
 if args.seed is not None:
     random.seed(args.seed)
@@ -137,7 +138,7 @@ def main():
 
         node_type_dataloader = utils.data.DataLoader(node_type_data_set,
                                                      collate_fn=collate,
-                                                     pin_memory=False if args.device is 'cpu' else True,
+                                                     pin_memory=False if args.device == 'cpu' else True,
                                                      batch_size=args.batch_size,
                                                      shuffle=True,
                                                      num_workers=args.preprocess_workers)
