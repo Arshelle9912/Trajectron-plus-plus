@@ -133,6 +133,21 @@ def propagate_pos_cov_from_vel(vel_samples, dt):
 
     return cov_p_list
 
+def split_samples_by_z(samples_raw, num_z=25, samples_per_z=20):
+    arr = np.asarray(samples_raw)
+
+    # common output: (1, total, ph, 2)
+    if arr.ndim == 4 and arr.shape[0] == 1:
+        arr = arr[0]  # (total, ph, 2)
+
+    total = num_z * samples_per_z
+    if arr.ndim == 3 and arr.shape[0] == total and arr.shape[-1] == 2:
+        ph = arr.shape[1]
+        arr = arr.reshape(num_z, samples_per_z, ph, 2)  # (Z, S, ph, 2)
+        return [arr[z] for z in range(num_z)]          # each is (S, ph, 2)
+
+    raise ValueError(f"Expected total={total} samples; got shape {arr.shape}")
+
 
 # 2D ellipse helper
 def add_cov_ellipse(ax, mu, cov, conf=0.7, fill=False, facecolor=None, **kwargs):
@@ -164,6 +179,103 @@ def add_cov_ellipse(ax, mu, cov, conf=0.7, fill=False, facecolor=None, **kwargs)
         **kwargs
     )
     ax.add_patch(e)
+
+def merge_allz_runs(pred_runs, num_z, samples_per_z):
+    """
+    pred_runs: list of predictions_dict from eval_stg.predict with all_z_sep=True and num_samples=num_z
+              each contains arrays shaped (1, num_z, ph, 2) per node per timestep.
+    returns: merged predictions_dict with arrays shaped (1, num_z*samples_per_z, ph, 2),
+             ordered z-major so split_samples_by_z() works.
+    """
+    assert len(pred_runs) == samples_per_z
+    merged = {}
+
+    for ts in pred_runs[0].keys():
+        merged[ts] = {}
+        for node in pred_runs[0][ts].keys():
+            # collect: (samples_per_z, 1, num_z, ph, 2) -> (samples_per_z, num_z, ph, 2)
+            stack = np.stack([pr[ts][node][0] for pr in pred_runs], axis=0)
+
+            # reorder to z-major: (samples_per_z, num_z, ph, 2) -> (num_z, samples_per_z, ph, 2)
+            stack = np.transpose(stack, (1, 0, 2, 3))
+
+            # flatten to (num_z*samples_per_z, ph, 2) then add batch dim -> (1, total, ph, 2)
+            merged_arr = stack.reshape(num_z * samples_per_z, stack.shape[2], stack.shape[3])[None, ...]
+            merged[ts][node] = merged_arr
+
+    return merged
+
+
+def draw_node_cov_chain_2d_all_z(
+    ax,
+    past,
+    future_gt,
+    samples_by_z,    
+    conf=0.7,
+    cov_source="vel",
+    dt=0.4,
+    fill_ellipses=True,
+    multi_rings=False,
+    draw_mean_points=False,
+    draw_samples=False,
+):
+    dummy_samples = samples_by_z[0]
+    draw_node_cov_chain_2d(
+        ax, past, future_gt, dummy_samples,
+        conf=conf,
+        draw_samples=False,         
+        time_colored=False,
+        multi_rings=False,
+        draw_mean_points=False,
+        cov_source=cov_source,
+        dt=dt,
+        fill_ellipses=False,
+        label_once={"history": True, "current": True, "pred": False, "conf": False, "gt": True},
+    )
+
+    conf_levels = [conf] if not multi_rings else [0.5, 0.7, 0.9]
+
+    num_z = len(samples_by_z)
+    for z in range(num_z):
+        samples = normalize_samples(samples_by_z[z])
+        K, ph, _ = samples.shape
+        if K < 2:
+            continue
+
+        col = plt.cm.tab20(z % 20) if num_z > 1 else "tab:blue"
+
+        cov_p_list = None
+        if cov_source == "vel":
+            p0 = np.asarray(past)[-1]
+            vel_samples = estimate_vel_samples_from_pos(samples, p0, dt)
+            cov_p_list = propagate_pos_cov_from_vel(vel_samples, dt)
+
+        for i in range(ph):
+            pts = samples[:, i, :]
+            mu = pts.mean(axis=0)
+            cov = cov_p_list[i] if cov_source == "vel" else np.cov(pts, rowvar=False)
+
+            for idx, c in enumerate(conf_levels):
+                edge_a = 0.55 if idx == 0 else 0.25
+                face_a = 0.10 if idx == 0 else 0.04
+                add_cov_ellipse(
+                    ax, mu, cov, conf=c,
+                    fill=fill_ellipses,
+                    facecolor=col if fill_ellipses else None,
+                    edgecolor=col,
+                    linewidth=1.2,
+                    alpha=face_a if fill_ellipses else edge_a
+                )
+
+            if draw_mean_points:
+                ax.scatter(mu[0], mu[1], s=8, color=col, alpha=0.7)
+
+        if draw_samples:
+            for k in range(min(K, 5)): 
+                s = samples[k]
+                sx = np.concatenate((past[-1:, 0], s[:, 0]))
+                sy = np.concatenate((past[-1:, 1], s[:, 1]))
+                ax.plot(sx, sy, linewidth=0.8, alpha=0.15, color=col)
 
 
 # 2D plot: draw ONE node onto an existing axis
@@ -287,6 +399,9 @@ def plot_timestep_all_nodes_2d(
     cov_source="vel",
     dt=0.4,
     fill_ellipses=True,
+    z_tubes=False, 
+    num_z=25,
+    samples_per_z=20
 ):
     fig, ax = plt.subplots(figsize=(6.8, 7.2))
 
@@ -298,25 +413,42 @@ def plot_timestep_all_nodes_2d(
     label_once = {"history": True, "current": True, "pred": True, "conf": True, "gt": True}
 
     for idx, node in enumerate(nodes):
-        samples = normalize_samples(pred_dict[node][t_key])
+        samples_raw = pred_dict[node][t_key]
         past = hist_dict[node][t_key]
         future_gt = fut_dict[node][t_key]
 
-        draw_node_cov_chain_2d(
-            ax,
-            past,
-            future_gt,
-            samples,
-            conf=conf,
-            draw_samples=draw_samples,
-            time_colored=time_colored,
-            multi_rings=multi_rings,
-            draw_mean_points=draw_mean_points,
-            cov_source=cov_source,
-            dt=dt,
-            fill_ellipses=fill_ellipses,
-            label_once=label_once,
-        )
+        if z_tubes:
+            samples_by_z = split_samples_by_z(samples_raw, num_z=num_z, samples_per_z=samples_per_z)
+            draw_node_cov_chain_2d_all_z(
+                ax,
+                past, future_gt,
+                samples_by_z,
+                conf=conf,
+                cov_source=cov_source,
+                dt=dt,
+                fill_ellipses=fill_ellipses,
+                multi_rings=multi_rings,
+                draw_mean_points=draw_mean_points,
+                draw_samples=False,
+            )
+        else:
+            samples = normalize_samples(samples_raw)
+            draw_node_cov_chain_2d(
+                ax,
+                past,
+                future_gt,
+                samples,
+                conf=conf,
+                draw_samples=draw_samples,
+                time_colored=time_colored,
+                multi_rings=multi_rings,
+                draw_mean_points=draw_mean_points,
+                cov_source=cov_source,
+                dt=dt,
+                fill_ellipses=fill_ellipses,
+                label_once=label_once,
+            )
+
         label_once = {"history": False, "current": False, "pred": False, "conf": False, "gt": False}
 
     ax.set_xlabel("X")
@@ -468,18 +600,20 @@ def main():
     parser.add_argument("--multi_rings", action="store_true")
     parser.add_argument("--no_mean_points", action="store_true")
 
-    parser.add_argument("--fill_ellipses", action="store_true",
-                        help="(2D) Fill ellipses (paper-style)")
-    parser.add_argument("--all_nodes", action="store_true",
-                        help="(2D) Overlay all nodes at this timestep")
+    parser.add_argument("--fill_ellipses", action="store_true")
+    parser.add_argument("--all_nodes", action="store_true")
 
     parser.add_argument("--max_ellipses", type=int, default=None)
     parser.add_argument("--draw_3d_samples", action="store_true")
 
-    parser.add_argument("--title_suffix", type=str, default="",
-                        help="Extra text appended to the title, e.g. '(DDPM, 100 steps, 20 samples, Uncalibrated)'")
+    parser.add_argument("--title_suffix", type=str, default="")
 
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--z_tubes", action="store_true")
+    parser.add_argument("--num_z", type=int, default=25)
+    parser.add_argument("--samples_per_z", type=int, default=20)
+    parser.add_argument("--top_k_z", type=int, default=None)
+
     args = parser.parse_args()
 
     with open(args.data, "rb") as f:
@@ -501,20 +635,49 @@ def main():
     t = args.timestep
     timesteps = np.array([t], dtype=int)
 
-    print(f"-- Predicting scene {args.scene_index}, timestep {t} with {args.num_samples} samples")
+    n_print = (args.num_z * args.samples_per_z) if args.z_tubes else args.num_samples
+    print(f"-- Predicting scene {args.scene_index}, timestep {t} with {n_print} samples")
+
 
     with torch.no_grad():
-        predictions = eval_stg.predict(
-            scene,
-            timesteps,
-            ph,
-            num_samples=args.num_samples,
-            min_history_timesteps=7,
-            min_future_timesteps=12,
-            z_mode=False,
-            gmm_mode=False,
-            full_dist=False,
-        )
+        if args.z_tubes:
+            # total samples = 25 tubes * samples_per_z
+            total = args.num_z * args.samples_per_z
+
+            # z index per sample: [0..0, 1..1, ..., 24..24] each repeated S times
+            dev = torch.device(args.device)
+            z_idx = torch.arange(args.num_z, device=dev).repeat_interleave(args.samples_per_z)
+
+
+            pred_runs = []
+            for _ in range(args.samples_per_z):
+                pr = eval_stg.predict(
+                    scene,
+                    timesteps,
+                    ph,
+                    num_samples=args.num_z,    
+                    min_history_timesteps=7,
+                    min_future_timesteps=12,
+                    z_mode=False,
+                    gmm_mode=False,
+                    full_dist=False,
+                    all_z_sep=True            
+                )
+                pred_runs.append(pr)
+
+            predictions = merge_allz_runs(pred_runs, num_z=args.num_z, samples_per_z=args.samples_per_z)
+        else:
+            predictions = eval_stg.predict(
+                scene,
+                timesteps,
+                ph,
+                num_samples=args.num_samples,
+                min_history_timesteps=7,
+                min_future_timesteps=12,
+                z_mode=False,
+                gmm_mode=False,
+                full_dist=True,
+            )
 
     if not predictions:
         print("No predictions returned.")
@@ -540,15 +703,17 @@ def main():
             title=title,
             conf=args.conf,
             draw_samples=(not args.no_sample_lines),
-            time_colored=True if args.time_colored else True,  # default-on for screenshot-like style
+            time_colored=True if args.time_colored else True,
             multi_rings=args.multi_rings,
             draw_mean_points=(not args.no_mean_points),
             cov_source=args.cov_source,
             dt=scene.dt,
-            fill_ellipses=True if args.fill_ellipses else True,  # default-on
+            fill_ellipses=True if args.fill_ellipses else True,
+            z_tubes=args.z_tubes,
+            num_z=args.num_z,
+            samples_per_z=args.samples_per_z,
         )
         return
-
     # single node fallback 
     node, t_key = pick_node_and_t(pred_dict, desired_t=t)
     if node is None:
@@ -558,24 +723,42 @@ def main():
     samples = pred_dict[node][t_key]
     past = hist_dict[node][t_key]
     future_gt = fut_dict[node][t_key]
-    samples_arr = normalize_samples(samples)
+    if args.z_tubes:
+        samples_by_z = split_samples_by_z(samples, num_z=args.num_z, samples_per_z=args.samples_per_z)
+    else:
+        samples_arr = normalize_samples(samples)
+
 
     if args.mode == "2d":
         fig, ax = plt.subplots(figsize=(6.8, 7.2))
         title = f"Scene_{args.scene_index}_Timestep_{t_key} {args.title_suffix}".strip()
 
-        draw_node_cov_chain_2d(
-            ax,
-            past, future_gt, samples_arr,
-            conf=args.conf,
-            draw_samples=(not args.no_sample_lines),
-            time_colored=True if args.time_colored else True,
-            multi_rings=args.multi_rings,
-            draw_mean_points=(not args.no_mean_points),
-            cov_source=args.cov_source,
-            dt=scene.dt,
-            fill_ellipses=True if args.fill_ellipses else True,
-        )
+        if args.z_tubes:
+            draw_node_cov_chain_2d_all_z(
+                ax,
+                past, future_gt,
+                samples_by_z,
+                conf=args.conf,
+                cov_source=args.cov_source,
+                dt=scene.dt,
+                fill_ellipses=True if args.fill_ellipses else True,
+                multi_rings=args.multi_rings,
+                draw_mean_points=(not args.no_mean_points),
+                draw_samples=False,   # set True if you want a few per-z sample lines
+            )
+        else:
+            draw_node_cov_chain_2d(
+                ax,
+                past, future_gt, samples_arr,
+                conf=args.conf,
+                draw_samples=(not args.no_sample_lines),
+                time_colored=True if args.time_colored else True,
+                multi_rings=args.multi_rings,
+                draw_mean_points=(not args.no_mean_points),
+                cov_source=args.cov_source,
+                dt=scene.dt,
+                fill_ellipses=True if args.fill_ellipses else True,
+            )
 
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
